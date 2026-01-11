@@ -41,7 +41,7 @@ export default function DashboardScreen() {
       setRecentAppointments(appointmentsRes.data.slice(0, 5));
 
       // Get analytics
-      const analyticsRes = await api.get('/analytics/revenue');
+      const analyticsRes = await api.get('/analytics/financial');
       setStats({
         totalRevenue: analyticsRes.data.total_revenue || 0,
         totalAppointments: analyticsRes.data.total_appointments || 0,
