@@ -599,8 +599,16 @@ async def get_appointments(
     status: Optional[str] = None,
     date: Optional[str] = None,
     barber_id: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0,
     current_user = Depends(get_current_user)
 ):
+    # Validate limit
+    if limit > 100:
+        limit = 100
+    if limit < 1:
+        limit = 50
+        
     query = {"barbershop_id": str(current_user["_id"])}
     if status:
         query["status"] = status
@@ -609,7 +617,14 @@ async def get_appointments(
     if barber_id:
         query["barber_id"] = barber_id
     
-    appointments = await db.appointments.find(query).sort("time", 1).to_list(1000)
+    appointments = await db.appointments.find(
+        query,
+        {"_id": 1, "client_id": 1, "client_name": 1, "service_id": 1, "service_name": 1, 
+         "barber_id": 1, "barber_name": 1, "date": 1, "time": 1, "price": 1, 
+         "barber_commission": 1, "notes": 1, "barbershop_id": 1, "status": 1, 
+         "created_at": 1, "completed_at": 1}
+    ).sort("time", 1).skip(skip).limit(limit).to_list(None)
+    
     return [AppointmentResponse(id=str(a["_id"]), **{k: v for k, v in a.items() if k != "_id"}) for a in appointments]
 
 @api_router.post("/appointments", response_model=AppointmentResponse)
