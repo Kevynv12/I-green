@@ -532,6 +532,36 @@ async def get_client(client_id: str, current_user = Depends(get_current_user)):
     
     return ClientResponse(id=str(client["_id"]), **{k: v for k, v in client.items() if k != "_id"})
 
+@api_router.put("/clients/{client_id}", response_model=ClientResponse)
+async def update_client(client_id: str, client_data: ClientUpdate, current_user = Depends(get_current_user)):
+    update_data = {k: v for k, v in client_data.model_dump().items() if v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data to update")
+    
+    await db.clients.update_one(
+        {"_id": ObjectId(client_id), "barbershop_id": str(current_user["_id"])},
+        {"$set": update_data}
+    )
+    
+    client = await db.clients.find_one({"_id": ObjectId(client_id)})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    return ClientResponse(id=str(client["_id"]), **{k: v for k, v in client.items() if k != "_id"})
+
+@api_router.delete("/clients/{client_id}")
+async def delete_client(client_id: str, current_user = Depends(get_current_user)):
+    result = await db.clients.delete_one({
+        "_id": ObjectId(client_id),
+        "barbershop_id": str(current_user["_id"])
+    })
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    return {"message": "Client deleted successfully"}
+
 # ==================== APPOINTMENTS ROUTES ====================
 
 @api_router.get("/appointments", response_model=List[AppointmentResponse])
