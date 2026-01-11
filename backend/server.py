@@ -22,7 +22,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # JWT Configuration
-SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "neobarber-secret-key-change-in-production")
+SECRET_KEY = os.environ['JWT_SECRET_KEY']
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
@@ -35,21 +35,6 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 # ==================== MODELS ====================
-
-class PyObjectId(ObjectId):
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid ObjectId")
-        return ObjectId(v)
-
-    @classmethod
-    def __modify_schema__(cls, field_schema):
-        field_schema.update(type="string")
 
 # User Models
 class UserBase(BaseModel):
@@ -81,7 +66,7 @@ class BarberBase(BaseModel):
     name: str
     phone: Optional[str] = None
     email: Optional[str] = None
-    commission_percentage: float = 50.0  # Percentual de comissão (0-100)
+    commission_percentage: float = 50.0
     is_active: bool = True
 
 class BarberCreate(BarberBase):
@@ -100,9 +85,6 @@ class BarberResponse(BarberBase):
     total_services: int = 0
     total_earned: float = 0
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 # Product Models
 class ProductBase(BaseModel):
@@ -110,7 +92,7 @@ class ProductBase(BaseModel):
     cost_price: float
     sale_price: float
     stock_quantity: int = 0
-    barber_commission_percentage: float = 10.0  # Comissão do barbeiro na venda
+    barber_commission_percentage: float = 10.0
     description: Optional[str] = None
 
 class ProductCreate(ProductBase):
@@ -129,9 +111,31 @@ class ProductResponse(ProductBase):
     barbershop_id: str
     profit_margin: float
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
+
+# Sale Models
+class SaleItemBase(BaseModel):
+    product_id: str
+    product_name: str
+    quantity: int
+    unit_price: float
+    total_price: float
+
+class SaleBase(BaseModel):
+    client_id: Optional[str] = None
+    client_name: Optional[str] = None
+    barber_id: Optional[str] = None
+    barber_name: Optional[str] = None
+    items: List[SaleItemBase]
+    total_amount: float
+    barber_commission: float = 0
+
+class SaleCreate(SaleBase):
+    pass
+
+class SaleResponse(SaleBase):
+    id: str
+    barbershop_id: str
+    created_at: datetime
 
 # Service Models
 class ServiceBase(BaseModel):
@@ -146,9 +150,6 @@ class ServiceCreate(ServiceBase):
 class ServiceResponse(ServiceBase):
     id: str
     barbershop_id: str
-    
-    class Config:
-        from_attributes = True
 
 # Client Models
 class ClientBase(BaseModel):
@@ -166,20 +167,19 @@ class ClientResponse(ClientBase):
     visits: int = 0
     total_spent: float = 0
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 # Appointment Models
 class AppointmentBase(BaseModel):
-    client_id: str
+    client_id: Optional[str] = None
     client_name: str
     service_id: str
     service_name: str
-    date: str  # YYYY-MM-DD
-    time: str  # HH:MM
-    price: float
+    barber_id: Optional[str] = None
     barber_name: Optional[str] = None
+    date: str
+    time: str
+    price: float
+    barber_commission: float = 0
     notes: Optional[str] = None
 
 class AppointmentCreate(AppointmentBase):
@@ -188,17 +188,14 @@ class AppointmentCreate(AppointmentBase):
 class AppointmentResponse(AppointmentBase):
     id: str
     barbershop_id: str
-    status: str  # confirmed, completed, cancelled
+    status: str
     created_at: datetime
     completed_at: Optional[datetime] = None
-    
-    class Config:
-        from_attributes = True
 
 # Task Models
 class TaskBase(BaseModel):
     title: str
-    priority: str = "normal"  # low, normal, high
+    priority: str = "normal"
 
 class TaskCreate(TaskBase):
     pass
@@ -208,9 +205,6 @@ class TaskResponse(TaskBase):
     barbershop_id: str
     done: bool = False
     created_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -243,24 +237,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     
     return user
 
-def serialize_doc(doc):
-    """Convert MongoDB document to JSON-serializable dict"""
-    if doc is None:
-        return None
-    doc["id"] = str(doc["_id"])
-    del doc["_id"]
-    return doc
-
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register", response_model=Token)
 async def register(user_data: UserCreate):
-    # Check if user exists
     existing_user = await db.users.find_one({"email": user_data.email})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Create user
     user_dict = user_data.model_dump()
     user_dict["password"] = get_password_hash(user_data.password)
     user_dict["created_at"] = datetime.utcnow()
@@ -275,7 +259,6 @@ async def register(user_data: UserCreate):
     ]
     await db.services.insert_many(default_services)
     
-    # Generate token
     access_token = create_access_token(data={"sub": str(result.inserted_id)})
     
     user = await db.users.find_one({"_id": result.inserted_id})
@@ -316,6 +299,156 @@ async def get_me(current_user = Depends(get_current_user)):
         barbershop_name=current_user.get("barbershop_name"),
         created_at=current_user["created_at"]
     )
+
+# ==================== BARBERS ROUTES ====================
+
+@api_router.get("/barbers", response_model=List[BarberResponse])
+async def get_barbers(current_user = Depends(get_current_user)):
+    barbers = await db.barbers.find({"barbershop_id": str(current_user["_id"])}).to_list(100)
+    return [BarberResponse(id=str(b["_id"]), **{k: v for k, v in b.items() if k != "_id"}) for b in barbers]
+
+@api_router.post("/barbers", response_model=BarberResponse)
+async def create_barber(barber_data: BarberCreate, current_user = Depends(get_current_user)):
+    barber_dict = barber_data.model_dump()
+    barber_dict["barbershop_id"] = str(current_user["_id"])
+    barber_dict["total_services"] = 0
+    barber_dict["total_earned"] = 0
+    barber_dict["created_at"] = datetime.utcnow()
+    
+    result = await db.barbers.insert_one(barber_dict)
+    barber = await db.barbers.find_one({"_id": result.inserted_id})
+    
+    return BarberResponse(id=str(barber["_id"]), **{k: v for k, v in barber.items() if k != "_id"})
+
+@api_router.put("/barbers/{barber_id}", response_model=BarberResponse)
+async def update_barber(barber_id: str, barber_data: BarberUpdate, current_user = Depends(get_current_user)):
+    update_data = {k: v for k, v in barber_data.model_dump().items() if v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data to update")
+    
+    await db.barbers.update_one(
+        {"_id": ObjectId(barber_id), "barbershop_id": str(current_user["_id"])},
+        {"$set": update_data}
+    )
+    
+    barber = await db.barbers.find_one({"_id": ObjectId(barber_id)})
+    if not barber:
+        raise HTTPException(status_code=404, detail="Barber not found")
+    
+    return BarberResponse(id=str(barber["_id"]), **{k: v for k, v in barber.items() if k != "_id"})
+
+@api_router.delete("/barbers/{barber_id}")
+async def delete_barber(barber_id: str, current_user = Depends(get_current_user)):
+    result = await db.barbers.delete_one({
+        "_id": ObjectId(barber_id),
+        "barbershop_id": str(current_user["_id"])
+    })
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Barber not found")
+    
+    return {"message": "Barber deleted successfully"}
+
+# ==================== PRODUCTS ROUTES ====================
+
+@api_router.get("/products", response_model=List[ProductResponse])
+async def get_products(current_user = Depends(get_current_user)):
+    products = await db.products.find({"barbershop_id": str(current_user["_id"])}).to_list(100)
+    result = []
+    for p in products:
+        profit_margin = ((p["sale_price"] - p["cost_price"]) / p["cost_price"] * 100) if p["cost_price"] > 0 else 0
+        result.append(ProductResponse(
+            id=str(p["_id"]),
+            profit_margin=round(profit_margin, 2),
+            **{k: v for k, v in p.items() if k != "_id"}
+        ))
+    return result
+
+@api_router.post("/products", response_model=ProductResponse)
+async def create_product(product_data: ProductCreate, current_user = Depends(get_current_user)):
+    product_dict = product_data.model_dump()
+    product_dict["barbershop_id"] = str(current_user["_id"])
+    product_dict["created_at"] = datetime.utcnow()
+    
+    result = await db.products.insert_one(product_dict)
+    product = await db.products.find_one({"_id": result.inserted_id})
+    
+    profit_margin = ((product["sale_price"] - product["cost_price"]) / product["cost_price"] * 100) if product["cost_price"] > 0 else 0
+    
+    return ProductResponse(
+        id=str(product["_id"]),
+        profit_margin=round(profit_margin, 2),
+        **{k: v for k, v in product.items() if k != "_id"}
+    )
+
+@api_router.put("/products/{product_id}", response_model=ProductResponse)
+async def update_product(product_id: str, product_data: ProductUpdate, current_user = Depends(get_current_user)):
+    update_data = {k: v for k, v in product_data.model_dump().items() if v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data to update")
+    
+    await db.products.update_one(
+        {"_id": ObjectId(product_id), "barbershop_id": str(current_user["_id"])},
+        {"$set": update_data}
+    )
+    
+    product = await db.products.find_one({"_id": ObjectId(product_id)})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    profit_margin = ((product["sale_price"] - product["cost_price"]) / product["cost_price"] * 100) if product["cost_price"] > 0 else 0
+    
+    return ProductResponse(
+        id=str(product["_id"]),
+        profit_margin=round(profit_margin, 2),
+        **{k: v for k, v in product.items() if k != "_id"}
+    )
+
+@api_router.delete("/products/{product_id}")
+async def delete_product(product_id: str, current_user = Depends(get_current_user)):
+    result = await db.products.delete_one({
+        "_id": ObjectId(product_id),
+        "barbershop_id": str(current_user["_id"])
+    })
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    return {"message": "Product deleted successfully"}
+
+# ==================== SALES ROUTES ====================
+
+@api_router.get("/sales", response_model=List[SaleResponse])
+async def get_sales(current_user = Depends(get_current_user)):
+    sales = await db.sales.find({"barbershop_id": str(current_user["_id"])}).sort("created_at", -1).to_list(100)
+    return [SaleResponse(id=str(s["_id"]), **{k: v for k, v in s.items() if k != "_id"}) for s in sales]
+
+@api_router.post("/sales", response_model=SaleResponse)
+async def create_sale(sale_data: SaleCreate, current_user = Depends(get_current_user)):
+    sale_dict = sale_data.model_dump()
+    sale_dict["barbershop_id"] = str(current_user["_id"])
+    sale_dict["created_at"] = datetime.utcnow()
+    
+    # Update product stock
+    for item in sale_data.items:
+        await db.products.update_one(
+            {"_id": ObjectId(item.product_id)},
+            {"$inc": {"stock_quantity": -item.quantity}}
+        )
+    
+    # Update barber earnings if barber is specified
+    if sale_data.barber_id:
+        await db.barbers.update_one(
+            {"_id": ObjectId(sale_data.barber_id)},
+            {"$inc": {"total_earned": sale_data.barber_commission}}
+        )
+    
+    result = await db.sales.insert_one(sale_dict)
+    sale = await db.sales.find_one({"_id": result.inserted_id})
+    
+    return SaleResponse(id=str(sale["_id"]), **{k: v for k, v in sale.items() if k != "_id"})
 
 # ==================== SERVICES ROUTES ====================
 
@@ -368,6 +501,7 @@ async def get_client(client_id: str, current_user = Depends(get_current_user)):
 async def get_appointments(
     status: Optional[str] = None,
     date: Optional[str] = None,
+    barber_id: Optional[str] = None,
     current_user = Depends(get_current_user)
 ):
     query = {"barbershop_id": str(current_user["_id"])}
@@ -375,6 +509,8 @@ async def get_appointments(
         query["status"] = status
     if date:
         query["date"] = date
+    if barber_id:
+        query["barber_id"] = barber_id
     
     appointments = await db.appointments.find(query).sort("time", 1).to_list(1000)
     return [AppointmentResponse(id=str(a["_id"]), **{k: v for k, v in a.items() if k != "_id"}) for a in appointments]
@@ -386,6 +522,12 @@ async def create_appointment(appointment_data: AppointmentCreate, current_user =
     appointment_dict["status"] = "confirmed"
     appointment_dict["created_at"] = datetime.utcnow()
     appointment_dict["completed_at"] = None
+    
+    # Calculate barber commission if barber is assigned
+    if appointment_data.barber_id:
+        barber = await db.barbers.find_one({"_id": ObjectId(appointment_data.barber_id)})
+        if barber:
+            appointment_dict["barber_commission"] = appointment_data.price * (barber["commission_percentage"] / 100)
     
     result = await db.appointments.insert_one(appointment_dict)
     appointment = await db.appointments.find_one({"_id": result.inserted_id})
@@ -406,6 +548,13 @@ async def update_appointment(
         raise HTTPException(status_code=404, detail="Appointment not found")
     
     update_data = appointment_data.model_dump()
+    
+    # Recalculate barber commission if barber changed
+    if appointment_data.barber_id:
+        barber = await db.barbers.find_one({"_id": ObjectId(appointment_data.barber_id)})
+        if barber:
+            update_data["barber_commission"] = appointment_data.price * (barber["commission_percentage"] / 100)
+    
     await db.appointments.update_one(
         {"_id": ObjectId(appointment_id)},
         {"$set": update_data}
@@ -429,13 +578,29 @@ async def complete_appointment(appointment_id: str, current_user = Depends(get_c
         {"$set": {"status": "completed", "completed_at": datetime.utcnow()}}
     )
     
-    # Update client stats
-    await db.clients.update_one(
-        {"_id": ObjectId(appointment["client_id"])},
-        {
-            "$inc": {"visits": 1, "total_spent": appointment["price"]}
-        }
-    )
+    # Update client stats if client_id exists
+    if appointment.get("client_id"):
+        try:
+            await db.clients.update_one(
+                {"_id": ObjectId(appointment["client_id"])},
+                {
+                    "$inc": {"visits": 1, "total_spent": appointment["price"]}
+                }
+            )
+        except:
+            pass  # If client doesn't exist, just skip
+    
+    # Update barber stats if barber_id exists
+    if appointment.get("barber_id"):
+        await db.barbers.update_one(
+            {"_id": ObjectId(appointment["barber_id"])},
+            {
+                "$inc": {
+                    "total_services": 1,
+                    "total_earned": appointment.get("barber_commission", 0)
+                }
+            }
+        )
     
     return {"message": "Appointment completed successfully"}
 
@@ -500,8 +665,8 @@ async def delete_task(task_id: str, current_user = Depends(get_current_user)):
 
 # ==================== ANALYTICS ROUTES ====================
 
-@api_router.get("/analytics/revenue")
-async def get_revenue_analytics(
+@api_router.get("/analytics/financial")
+async def get_financial_analytics(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     current_user = Depends(get_current_user)
@@ -519,12 +684,34 @@ async def get_revenue_analytics(
         else:
             query["date"] = {"$lte": end_date}
     
+    # Get completed appointments
     appointments = await db.appointments.find(query).to_list(10000)
     
-    total_revenue = sum(apt["price"] for apt in appointments)
-    total_appointments = len(appointments)
+    # Get sales
+    sales_query = {"barbershop_id": str(current_user["_id"])}
+    sales = await db.sales.find(sales_query).to_list(10000)
     
-    # Group by date for chart
+    # Calculate totals
+    services_revenue = sum(apt["price"] for apt in appointments)
+    products_revenue = sum(sale["total_amount"] for sale in sales)
+    total_revenue = services_revenue + products_revenue
+    
+    # Calculate commissions
+    total_barber_commission = sum(apt.get("barber_commission", 0) for apt in appointments)
+    total_barber_commission += sum(sale.get("barber_commission", 0) for sale in sales)
+    
+    # Calculate products cost
+    total_products_cost = 0
+    for sale in sales:
+        for item in sale["items"]:
+            product = await db.products.find_one({"_id": ObjectId(item["product_id"])})
+            if product:
+                total_products_cost += product["cost_price"] * item["quantity"]
+    
+    # Net profit
+    net_profit = total_revenue - total_barber_commission - total_products_cost
+    
+    # Group revenue by date
     revenue_by_date = {}
     for apt in appointments:
         date = apt["date"]
@@ -532,24 +719,53 @@ async def get_revenue_analytics(
             revenue_by_date[date] = 0
         revenue_by_date[date] += apt["price"]
     
+    for sale in sales:
+        date = sale["created_at"].strftime("%Y-%m-%d")
+        if date not in revenue_by_date:
+            revenue_by_date[date] = 0
+        revenue_by_date[date] += sale["total_amount"]
+    
     chart_data = [{"date": date, "revenue": revenue} for date, revenue in sorted(revenue_by_date.items())]
+    
+    # Barber performance
+    barber_stats = {}
+    for apt in appointments:
+        if apt.get("barber_id"):
+            barber_id = apt["barber_id"]
+            if barber_id not in barber_stats:
+                barber = await db.barbers.find_one({"_id": ObjectId(barber_id)})
+                if barber:
+                    barber_stats[barber_id] = {
+                        "name": barber["name"],
+                        "total_services": 0,
+                        "total_earned": 0
+                    }
+            if barber_id in barber_stats:
+                barber_stats[barber_id]["total_services"] += 1
+                barber_stats[barber_id]["total_earned"] += apt.get("barber_commission", 0)
     
     return {
         "total_revenue": total_revenue,
-        "total_appointments": total_appointments,
-        "average_ticket": total_revenue / total_appointments if total_appointments > 0 else 0,
-        "chart_data": chart_data
+        "services_revenue": services_revenue,
+        "products_revenue": products_revenue,
+        "total_barber_commission": total_barber_commission,
+        "total_products_cost": total_products_cost,
+        "net_profit": net_profit,
+        "total_appointments": len(appointments),
+        "total_sales": len(sales),
+        "chart_data": chart_data,
+        "barber_performance": list(barber_stats.values())
     }
 
 # ==================== ROOT ROUTES ====================
 
 @api_router.get("/")
 async def root():
-    return {"message": "NEOBARBER API - Sistema de Gestão de Barbearia"}
+    return {"message": "NEOBARBER API v2 - Sistema Completo de Gestão"}
 
 @api_router.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "neobarber-api"}
+    return {"status": "ok", "service": "neobarber-api-v2"}
 
 # Include router
 app.include_router(api_router)
