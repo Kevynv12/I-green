@@ -43,6 +43,33 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="barbers"
+        options={{
+          title: 'Barbeiros',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="cut-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="financial"
+        options={{
+          title: 'Financeiro',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="wallet-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="products"
+        options={{
+          title: 'Produtos',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="cube-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="clients"
         options={{
           title: 'Clientes',
