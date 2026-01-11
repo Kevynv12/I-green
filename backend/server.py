@@ -167,6 +167,8 @@ class ClientResponse(ClientBase):
     visits: int = 0
     total_spent: float = 0
     created_at: datetime
+    days_since_last_visit: Optional[int] = None
+    avatar: Optional[str] = "barber1"  # Default avatar
 
 # Appointment Models
 class AppointmentBase(BaseModel):
