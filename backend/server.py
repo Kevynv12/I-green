@@ -472,7 +472,34 @@ async def create_service(service_data: ServiceCreate, current_user = Depends(get
 @api_router.get("/clients", response_model=List[ClientResponse])
 async def get_clients(current_user = Depends(get_current_user)):
     clients = await db.clients.find({"barbershop_id": str(current_user["_id"])}).to_list(1000)
-    return [ClientResponse(id=str(c["_id"]), **{k: v for k, v in c.items() if k != "_id"}) for c in clients]
+    
+    result = []
+    for c in clients:
+        # Calculate days since last visit
+        last_appointment = await db.appointments.find_one(
+            {
+                "barbershop_id": str(current_user["_id"]),
+                "client_name": c["name"],
+                "status": "completed"
+            },
+            sort=[("completed_at", -1)]
+        )
+        
+        days_since_last_visit = None
+        if last_appointment and last_appointment.get("completed_at"):
+            delta = datetime.utcnow() - last_appointment["completed_at"]
+            days_since_last_visit = delta.days
+        
+        client_response = ClientResponse(
+            id=str(c["_id"]),
+            **{k: v for k, v in c.items() if k != "_id"}
+        )
+        # Add days_since_last_visit to response
+        client_dict = client_response.model_dump()
+        client_dict["days_since_last_visit"] = days_since_last_visit
+        result.append(client_dict)
+    
+    return result
 
 @api_router.post("/clients", response_model=ClientResponse)
 async def create_client(client_data: ClientCreate, current_user = Depends(get_current_user)):
