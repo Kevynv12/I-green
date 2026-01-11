@@ -157,9 +157,17 @@ class ClientBase(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     notes: Optional[str] = None
+    avatar: str = "barber1"  # Avatar padrão
 
 class ClientCreate(ClientBase):
     pass
+
+class ClientUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
+    avatar: Optional[str] = None
 
 class ClientResponse(ClientBase):
     id: str
