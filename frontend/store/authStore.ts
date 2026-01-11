@@ -31,7 +31,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       const response = await api.post('/auth/login', { email, password });
       const { access_token, user } = response.data;
       
-      await SecureStore.setItemAsync('token', access_token);
+      await storage.setItem('token', access_token);
       set({ user, token: access_token, isAuthenticated: true });
     } catch (error: any) {
       throw new Error(error.response?.data?.detail || 'Falha no login');
@@ -48,7 +48,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       });
       const { access_token, user } = response.data;
       
-      await SecureStore.setItemAsync('token', access_token);
+      await storage.setItem('token', access_token);
       set({ user, token: access_token, isAuthenticated: true });
     } catch (error: any) {
       throw new Error(error.response?.data?.detail || 'Falha no registro');
@@ -56,13 +56,13 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
-    await SecureStore.deleteItemAsync('token');
+    await storage.deleteItem('token');
     set({ user: null, token: null, isAuthenticated: false });
   },
 
   loadUser: async () => {
     try {
-      const token = await SecureStore.getItemAsync('token');
+      const token = await storage.getItem('token');
       if (token) {
         const response = await api.get('/auth/me');
         set({ user: response.data, token, isAuthenticated: true, isLoading: false });
@@ -70,7 +70,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         set({ isLoading: false });
       }
     } catch (error) {
-      await SecureStore.deleteItemAsync('token');
+      await storage.deleteItem('token');
       set({ user: null, token: null, isAuthenticated: false, isLoading: false });
     }
   },
