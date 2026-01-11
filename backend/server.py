@@ -684,12 +684,18 @@ async def get_financial_analytics(
         else:
             query["date"] = {"$lte": end_date}
     
-    # Get completed appointments
-    appointments = await db.appointments.find(query).to_list(10000)
+    # Get completed appointments with projection
+    appointments = await db.appointments.find(
+        query,
+        {"price": 1, "barber_commission": 1, "date": 1, "barber_id": 1}
+    ).to_list(10000)
     
-    # Get sales
+    # Get sales with projection
     sales_query = {"barbershop_id": str(current_user["_id"])}
-    sales = await db.sales.find(sales_query).to_list(10000)
+    sales = await db.sales.find(
+        sales_query,
+        {"total_amount": 1, "barber_commission": 1, "items": 1, "created_at": 1}
+    ).to_list(10000)
     
     # Calculate totals
     services_revenue = sum(apt["price"] for apt in appointments)
@@ -700,11 +706,25 @@ async def get_financial_analytics(
     total_barber_commission = sum(apt.get("barber_commission", 0) for apt in appointments)
     total_barber_commission += sum(sale.get("barber_commission", 0) for sale in sales)
     
-    # Calculate products cost
+    # Batch fetch products for cost calculation (FIX N+1)
+    product_ids = set()
+    for sale in sales:
+        for item in sale.get("items", []):
+            product_ids.add(item["product_id"])
+    
+    products_dict = {}
+    if product_ids:
+        products_list = await db.products.find(
+            {"_id": {"$in": [ObjectId(pid) for pid in product_ids]}},
+            {"_id": 1, "cost_price": 1}
+        ).to_list(None)
+        products_dict = {str(p["_id"]): p for p in products_list}
+    
+    # Calculate products cost using batch-fetched data
     total_products_cost = 0
     for sale in sales:
-        for item in sale["items"]:
-            product = await db.products.find_one({"_id": ObjectId(item["product_id"])})
+        for item in sale.get("items", []):
+            product = products_dict.get(item["product_id"])
             if product:
                 total_products_cost += product["cost_price"] * item["quantity"]
     
@@ -727,13 +747,27 @@ async def get_financial_analytics(
     
     chart_data = [{"date": date, "revenue": revenue} for date, revenue in sorted(revenue_by_date.items())]
     
-    # Barber performance
+    # Batch fetch barbers for performance (FIX N+1)
+    barber_ids = set()
+    for apt in appointments:
+        if apt.get("barber_id"):
+            barber_ids.add(apt["barber_id"])
+    
+    barbers_dict = {}
+    if barber_ids:
+        barbers_list = await db.barbers.find(
+            {"_id": {"$in": [ObjectId(bid) for bid in barber_ids]}},
+            {"_id": 1, "name": 1}
+        ).to_list(None)
+        barbers_dict = {str(b["_id"]): b for b in barbers_list}
+    
+    # Barber performance using batch-fetched data
     barber_stats = {}
     for apt in appointments:
         if apt.get("barber_id"):
             barber_id = apt["barber_id"]
             if barber_id not in barber_stats:
-                barber = await db.barbers.find_one({"_id": ObjectId(barber_id)})
+                barber = barbers_dict.get(barber_id)
                 if barber:
                     barber_stats[barber_id] = {
                         "name": barber["name"],
