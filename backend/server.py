@@ -76,6 +76,63 @@ class Token(BaseModel):
     token_type: str
     user: UserResponse
 
+# Barber Models
+class BarberBase(BaseModel):
+    name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    commission_percentage: float = 50.0  # Percentual de comissão (0-100)
+    is_active: bool = True
+
+class BarberCreate(BarberBase):
+    pass
+
+class BarberUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    commission_percentage: Optional[float] = None
+    is_active: Optional[bool] = None
+
+class BarberResponse(BarberBase):
+    id: str
+    barbershop_id: str
+    total_services: int = 0
+    total_earned: float = 0
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+# Product Models
+class ProductBase(BaseModel):
+    name: str
+    cost_price: float
+    sale_price: float
+    stock_quantity: int = 0
+    barber_commission_percentage: float = 10.0  # Comissão do barbeiro na venda
+    description: Optional[str] = None
+
+class ProductCreate(ProductBase):
+    pass
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    cost_price: Optional[float] = None
+    sale_price: Optional[float] = None
+    stock_quantity: Optional[int] = None
+    barber_commission_percentage: Optional[float] = None
+    description: Optional[str] = None
+
+class ProductResponse(ProductBase):
+    id: str
+    barbershop_id: str
+    profit_margin: float
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
 # Service Models
 class ServiceBase(BaseModel):
     name: str
