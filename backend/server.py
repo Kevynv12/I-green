@@ -481,32 +481,62 @@ async def create_service(service_data: ServiceCreate, current_user = Depends(get
 
 @api_router.get("/clients", response_model=List[ClientResponse])
 async def get_clients(current_user = Depends(get_current_user)):
-    clients = await db.clients.find({"barbershop_id": str(current_user["_id"])}).to_list(1000)
+    # Fetch clients with projection
+    clients = await db.clients.find(
+        {"barbershop_id": str(current_user["_id"])},
+        {"name": 1, "phone": 1, "email": 1, "notes": 1, "visits": 1, "total_spent": 1, "avatar": 1, "created_at": 1, "barbershop_id": 1}
+    ).limit(100).to_list(None)
     
+    if not clients:
+        return []
+    
+    # Batch fetch last appointments for all clients (FIX N+1)
+    client_names = [c["name"] for c in clients]
+    last_appointments_cursor = db.appointments.aggregate([
+        {
+            "$match": {
+                "barbershop_id": str(current_user["_id"]),
+                "client_name": {"$in": client_names},
+                "status": "completed"
+            }
+        },
+        {
+            "$sort": {"completed_at": -1}
+        },
+        {
+            "$group": {
+                "_id": "$client_name",
+                "last_completed": {"$first": "$completed_at"}
+            }
+        }
+    ])
+    
+    last_appointments_list = await last_appointments_cursor.to_list(None)
+    last_appointments_dict = {apt["_id"]: apt["last_completed"] for apt in last_appointments_list}
+    
+    # Build response with days calculation
     result = []
     for c in clients:
-        # Calculate days since last visit
-        last_appointment = await db.appointments.find_one(
-            {
-                "barbershop_id": str(current_user["_id"]),
-                "client_name": c["name"],
-                "status": "completed"
-            },
-            sort=[("completed_at", -1)]
-        )
-        
         days_since_last_visit = None
-        if last_appointment and last_appointment.get("completed_at"):
-            delta = datetime.utcnow() - last_appointment["completed_at"]
+        last_completed = last_appointments_dict.get(c["name"])
+        
+        if last_completed:
+            delta = datetime.utcnow() - last_completed
             days_since_last_visit = delta.days
         
-        client_response = ClientResponse(
-            id=str(c["_id"]),
-            **{k: v for k, v in c.items() if k != "_id"}
-        )
-        # Add days_since_last_visit to response
-        client_dict = client_response.model_dump()
-        client_dict["days_since_last_visit"] = days_since_last_visit
+        client_dict = {
+            "id": str(c["_id"]),
+            "name": c["name"],
+            "phone": c.get("phone"),
+            "email": c.get("email"),
+            "notes": c.get("notes"),
+            "visits": c.get("visits", 0),
+            "total_spent": c.get("total_spent", 0),
+            "avatar": c.get("avatar", "barber1"),
+            "created_at": c["created_at"],
+            "barbershop_id": c["barbershop_id"],
+            "days_since_last_visit": days_since_last_visit
+        }
         result.append(client_dict)
     
     return result
